@@ -11,7 +11,8 @@ import (
 )
 
 var port string = "9998"
-var mainListen int = 10000
+var hsPort string = "10000"
+var endPoint = "/hs"
 var broadcastIP string = GetBroadcastIP().String()
 var myIP string = GetInterfaceIP().String()
 var myIPB []byte = []byte(myIP)
@@ -29,13 +30,11 @@ var msgOff []byte = []byte("offline")
 var msgBusy []byte = []byte("busy")
 var udpRepeat int = 5
 
-
 func main(){
-	Start()
+	activity()
 }
 
-func Start(){
-
+func activity(){	
 	sigs := make(chan os.Signal, 1)
     done := make(chan bool, 1)
     signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -44,8 +43,8 @@ func Start(){
 	receiveChan := make(chan string, 1)
     go func() {
         <- sigs
-		data := concatByteArray(" ", msgOff, myUsernameB)
-        offlineFunc(broadcastIP, port, data, done)
+  		receiveControl = false
+        onClose(done)
         <- done
       	os.Exit(0)
     }()
@@ -58,38 +57,38 @@ func Start(){
 			msgList = append(msgList, tempMsg)
 			UsernameList = append(UsernameList, tempUsername)
 			onlineCount++
+			msg := fmt.Sprintf(`{"stat":"%v","ip":"%v","username":"%v"}`,tempMsg, tempIP, tempUsername)
+			fmt.Println(msg)
 			data := concatByteArray(" ", msgOn, myUsernameB)
     		sendPack(broadcastIP, port, data)
-			msg := fmt.Sprintf("stat:%v:%v:%v",tempMsg, tempIP, tempUsername)
-			fmt.Println(myIP, mainListen, msg)
 		}
 		if hasThis(IPList, tempIP) && tempIP != myIP && tempMsg == string(msgOff){
 			IPList = removeFromList(IPList, tempIP)
 			msgList = removeFromList(msgList, string(msgOn))
 			UsernameList = removeFromList(UsernameList, tempUsername)
-			msg := fmt.Sprintf("stat:%v:%v:%v",tempMsg, tempIP, tempUsername)
-			fmt.Println(myIP, mainListen, msg)
+			msg := fmt.Sprintf(`{"stat":"%v","ip":"%v","username":"%v"}`,tempMsg, tempIP, tempUsername)
+			fmt.Println(msg)
 		}
 	}
 }
+
 
 func receive(ip, port string, ch chan<- string){
 	buff := make([]byte, 1024)
     pack, err := net.ListenPacket("udp", ip + ":" + port)
     if err != nil {
         fmt.Println("Connection Fail", err)
-        panic(err)
     }
     n, addr, err := pack.ReadFrom(buff)
     if err != nil {
         fmt.Println("Read Error", err)
-        panic(err)
+    }else{
+    	defer pack.Close()
+	    ipandport := strings.Split(addr.String(), ":")
+	    remoteIP := ipandport[0]
+	    buff = buff[:n]
+	    ch <- string(buff) + " " + remoteIP
     }
-    ipandport := strings.Split(addr.String(), ":")
-    remoteIP := ipandport[0]
-    buff = buff[:n]
-    ch <- string(buff) + " " + remoteIP
-    pack.Close()
 }
 
 func sendPack(ip, port string, data []byte){
@@ -114,22 +113,44 @@ func send(ip, port string, data []byte, ch chan<- int){
     conn, err := net.Dial("udp", ip + ":" + port)
        if err != nil {
         fmt.Println("Connection Fail")
-        panic(err)
     	ch <- 0
+    }else{
+    	defer conn.Close()
+	    conn.Write(data)
+	    ch <- 1
     }
-    conn.Write(data)
-    conn.Close()
-    ch <- 1
 }
 
-func offlineFunc(ip, port string, data []byte, ch chan<- bool){
+func onClose(ch chan<- bool){
+	sendValidationChan := make(chan int, 1)
+	data := concatByteArray(" ", msgOff, myUsernameB)
+	valid := 0
+	count := 0
+	for valid != 1 {
+		for i := 0 ; i < udpRepeat ; i++ {
+			go offlineFunc(broadcastIP, port, data , sendValidationChan)
+		}
+		valid = <- sendValidationChan
+		count++
+		if count > loopControl {
+			fmt.Println("Something is wrong can't send any signal!")
+			break
+		}
+	}
+	ch <- true
+}
+
+
+func offlineFunc(ip, port string, data []byte, ch chan<- int){
     conn, err := net.Dial("udp", ip + ":" + port)
        if err != nil {
         fmt.Println("Connection Fail")
+        ch <- 0
+    }else{
+    	defer conn.Close()
+    	conn.Write(data)
+    	ch <- 1
     }
-    conn.Write(data)
-    conn.Close()
-    ch <- true
 }
 
 func GetInterfaceIP() net.IP{
